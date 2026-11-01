@@ -33,11 +33,11 @@ programs.twitch-pip = {
 | --- | --- |
 | `twitch-pip toggle` | Open or close the player |
 | `twitch-pip chat` | Open or close popout chat for the current channel |
-| `twitch-pip login` | Open twitch.tv/login in a normal window of the same profile |
+| `twitch-pip login` | Open twitch.tv/login in a normal window of the same profile (Twitch blocks Helium password logins, see below) |
 | `twitch-pip status` | List open player and chat pages |
 | `twitch-pip quit` | Close the browser |
 
-Log in once with `twitch-pip login`. The session lives in `profileDir`, so captchas and chat work as on twitch.tv. To provision the login declaratively instead, see [Login from a secret](#login-from-a-secret).
+Twitch rejects password logins from Helium with "Browser not supported - integrity error" ([imputnet/helium#1756](https://github.com/imputnet/helium/issues/1756)), so `twitch-pip login` only helps on browsers Twitch accepts. Sign in from another browser and hand the session over through [Login from a secret](#login-from-a-secret). Once the cookie is in the profile, playback and chat use it as on twitch.tv.
 
 ## Login from a secret
 
@@ -53,11 +53,13 @@ Use a string path. A Nix path literal would copy the token into the world-readab
 
 The token is a full login for the account. Do not paste it into chats, issues, or shell history.
 
-1. Run `twitch-pip login` and sign in. A dedicated session is safer than copying one from a daily browser, because logging out anywhere revokes that session's token.
-2. In that window, open DevTools with `Ctrl+Shift+I`.
-3. Go to **Application → Storage → Cookies → https://www.twitch.tv**.
+1. In a browser Twitch accepts (Firefox, Zen, Chrome), open a **private window** and sign in to twitch.tv. A private window gives a separate session, so logging out of your daily session later does not revoke this token.
+2. In that window, open DevTools with `F12` or `Ctrl+Shift+I`.
+3. Open the cookie list for `https://www.twitch.tv`:
+   - Firefox and Zen: **Storage → Cookies**
+   - Chromium browsers: **Application → Storage → Cookies**
 4. Select the `auth-token` row and copy its **Value**. It is about 30 lowercase letters and digits.
-5. Close the window without logging out.
+5. Close the private window without logging out. Closing it discards the cookie locally, and the token stays valid on Twitch's side.
 
 ### Encrypt it with agenix
 
