@@ -16,6 +16,14 @@ let
     };
   };
   exe = lib.getExe cfg.package;
+  bindOption =
+    action: example:
+    lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      inherit example;
+      description = "Hyprland bind (mods, key) that runs `twitch-pip ${action}`. Null adds no bind.";
+    };
   m = cfg.hyprland.margin;
   # window_w/window_h resolve to the client's requested size, not the size rule, so offsets
   # come from the configured sizes.
@@ -97,18 +105,10 @@ in
 
     hyprland = {
       binds = {
-        chat = lib.mkOption {
-          type = lib.types.nullOr lib.types.str;
-          default = null;
-          example = "SUPER SHIFT, Y";
-          description = "Hyprland bind (mods, key) for toggling chat. Null adds no bind.";
-        };
-        toggle = lib.mkOption {
-          type = lib.types.nullOr lib.types.str;
-          default = null;
-          example = "SUPER, Y";
-          description = "Hyprland bind (mods, key) for toggling the player. Null adds no bind.";
-        };
+        chat = bindOption "chat" "SUPER SHIFT, Y";
+        quit = bindOption "quit" "SUPER CTRL, Y";
+        reset = bindOption "reset" "SUPER ALT, Y";
+        toggle = bindOption "toggle" "SUPER, Y";
       };
       enable =
         lib.mkEnableOption "Hyprland window rules that float, pin and place the player and chat"
@@ -173,13 +173,29 @@ in
             ;
           browser = lib.getExe cfg.browser;
           extensions = map toString cfg.extensions;
+          # Lets the script hide, show and reset the windows the rules below match.
+          hyprland =
+            if cfg.hyprland.enable then
+              {
+                inherit (cfg.hyprland) margin;
+                classes = {
+                  chat = chatClass;
+                  player = playerClass;
+                };
+                sizes = {
+                  chat = cfg.chatSize;
+                  player = cfg.playerSize;
+                };
+              }
+            else
+              null;
         };
       }
       (lib.mkIf cfg.hyprland.enable {
         wayland.windowManager.hyprland.settings = {
-          bind =
-            lib.optional (cfg.hyprland.binds.toggle != null) "${cfg.hyprland.binds.toggle}, exec, ${exe} toggle"
-            ++ lib.optional (cfg.hyprland.binds.chat != null) "${cfg.hyprland.binds.chat}, exec, ${exe} chat";
+          bind = lib.mapAttrsToList (action: key: "${key}, exec, ${exe} ${action}") (
+            lib.filterAttrs (_: key: key != null) cfg.hyprland.binds
+          );
           windowrule =
             pinned playerClass p.width p.height (fromRight p.width) (fromBottom p.height)
             ++ pinned chatClass c.width c.height (fromRight c.width) (fromBottom (c.height + p.height + m));

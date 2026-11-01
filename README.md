@@ -23,6 +23,8 @@ programs.twitch-pip = {
   hyprland.binds = {
     toggle = "SUPER, Y";
     chat = "SUPER SHIFT, Y";
+    reset = "SUPER ALT, Y";
+    quit = "SUPER CTRL, Y";
   };
 };
 ```
@@ -31,9 +33,10 @@ programs.twitch-pip = {
 
 | Command | Effect |
 | --- | --- |
-| `twitch-pip toggle` | Open or close the player |
-| `twitch-pip chat` | Open or close popout chat for the current channel |
+| `twitch-pip toggle` | Open the player, then hide and show it |
+| `twitch-pip chat` | Open popout chat for the current channel, then hide and show it |
 | `twitch-pip login` | Open twitch.tv/login in a normal window of the same profile (Twitch blocks Helium password logins, see below) |
+| `twitch-pip reset` | Move the player and chat back to the default corner and size |
 | `twitch-pip status` | List open player and chat pages |
 | `twitch-pip quit` | Close the browser |
 
@@ -103,7 +106,9 @@ The token stops working when the session logs out, when the password changes, or
 
 - Live checks use `decapi.me/twitch/uptime/<login>` every `pollSeconds` (default 60). An unknown or failed result on a higher-priority channel keeps the current stream instead of falling through. 24/7 channels can sit at the end of `channels` so they are tried in order before `fallback`.
 - One `serve` process owns the browser over `--remote-debugging-pipe`. No TCP debug port is opened. Hotkeys talk to it through `$XDG_RUNTIME_DIR/twitch-pip.sock`.
-- Closing the last window quits the browser and `serve`.
+- Under Hyprland, hiding moves a window to the `special:twitch-pip` workspace. The stream and its audio keep running, and the window comes back where you left it. Without Hyprland, toggling closes the window.
+- Clicks cannot pass through the windows; Hyprland has no rule for it. Hide them, or drag them away and `reset` later.
+- Closing the last window, `quit`, or killing either process (even with `SIGKILL`) stops both the browser and `serve`. The next toggle starts fresh.
 - F5 reloads the page as in any browser window.
 - Hyprland rules float, pin and place the player in the bottom-right corner with chat above it, and keep both from taking focus when they open. Blur is off for both, so a `hyprland.opacity` below 1.0 shows the windows behind them unblurred. Pinned floats stay visible over fullscreen windows.
 - Helium is built against the consumer's `pkgs`. Using a different nixpkgs than the system can break GPU acceleration through a glibc mismatch with `/run/opengl-driver`.

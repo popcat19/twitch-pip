@@ -23,7 +23,41 @@ for (const c of [...cfg.channels, cfg.fallback]) {
 
 if (!process.env.XDG_RUNTIME_DIR) throw new Error("XDG_RUNTIME_DIR is unset");
 const SOCK = join(process.env.XDG_RUNTIME_DIR, "twitch-pip.sock");
-const COMMANDS = new Set(["toggle", "chat", "login", "status", "quit"]);
+const COMMANDS = new Set(["toggle", "chat", "login", "reset", "status", "quit"]);
+const HIDDEN = "special:twitch-pip";
+
+// Hyprland request socket; same wire format as hyprctl. Window management is skipped
+// outside Hyprland or when the module disables it.
+const HYPR = cfg.hyprland && process.env.HYPRLAND_INSTANCE_SIGNATURE
+  ? join(process.env.XDG_RUNTIME_DIR, "hypr", process.env.HYPRLAND_INSTANCE_SIGNATURE, ".socket.sock")
+  : null;
+
+function hypr(request) {
+  return new Promise((resolve, reject) => {
+    const conn = net.connect(HYPR);
+    let out = "";
+    conn.on("connect", () => conn.write(request));
+    conn.on("data", (d) => (out += d));
+    conn.on("end", () => resolve(out));
+    conn.on("error", reject);
+  });
+}
+const hyprJson = async (what) => JSON.parse(await hypr(`j/${what}`));
+const hyprBatch = (cmds) => hypr(`[[BATCH]]${cmds.map((c) => `dispatch ${c}`).join(";")}`);
+
+async function windowOf(kind) {
+  const re = new RegExp(cfg.hyprland.classes[kind]);
+  return (await hyprJson("clients")).find((c) => re.test(c.class)) ?? null;
+}
+
+// Logical monitor size: rotated monitors swap width and height, then scale divides both.
+function logical(m) {
+  const rotated = m.transform % 2 === 1;
+  return {
+    h: Math.round((rotated ? m.width : m.height) / m.scale),
+    w: Math.round((rotated ? m.height : m.width) / m.scale),
+  };
+}
 
 const playerUrl = (ch) => `https://player.twitch.tv/?channel=${ch}&parent=twitch.tv&muted=false`;
 const chatUrl = (ch) => `https://www.twitch.tv/popout/${ch}/chat?popout=`;
@@ -222,12 +256,54 @@ async function serve(initial) {
   await cdp.send("Target.setDiscoverTargets", { discover: true });
   await applyAuthToken(cdp, () => [find("player"), find("chat")].filter(Boolean));
 
-  const toggle = async (kind) => {
-    const id = find(kind);
-    if (id) return cdp.send("Target.closeTarget", { targetId: id }).then(() => `closed ${kind}`);
+  const open = (kind) => {
     const ch = channelOf(targets.get(find(kind === "chat" ? "player" : "chat"))?.url ?? playerUrl(desired));
     openInRunning([`--app=${kind === "chat" ? chatUrl(ch) : playerUrl(ch)}`]);
     return `opened ${kind} ${ch}`;
+  };
+
+  // Hiding parks the window on a special workspace so the stream, position and size survive.
+  // Pinned windows cannot change workspace, so unpin on the way out and pin on the way back.
+  const toggle = async (kind) => {
+    const id = find(kind);
+    if (!id) return open(kind);
+    if (!HYPR) return cdp.send("Target.closeTarget", { targetId: id }).then(() => `closed ${kind}`);
+    const win = await windowOf(kind);
+    if (!win) return `${kind} window not mapped yet`;
+    const addr = `address:${win.address}`;
+    if (win.workspace.name === HIDDEN) {
+      const { id: ws } = await hyprJson("activeworkspace");
+      await hyprBatch([`movetoworkspacesilent ${ws},${addr}`, `pin ${addr}`]);
+      return `shown ${kind}`;
+    }
+    await hyprBatch([...(win.pinned ? [`pin ${addr}`] : []), `movetoworkspacesilent ${HIDDEN},${addr}`]);
+    return `hidden ${kind}`;
+  };
+
+  const reset = async () => {
+    if (!HYPR) return "reset needs Hyprland";
+    const monitors = await hyprJson("monitors");
+    const focused = monitors.find((m) => m.focused) ?? monitors[0];
+    const { margin, sizes } = cfg.hyprland;
+    const out = [];
+    for (const kind of ["player", "chat"]) {
+      const win = await windowOf(kind);
+      if (!win) continue;
+      const mon = monitors.find((m) => m.id === win.monitor) ?? focused;
+      const { w, h } = logical(mon);
+      const s = sizes[kind];
+      const below = kind === "chat" ? sizes.player.height + margin : 0;
+      const x = mon.x + w - s.width - margin;
+      const y = mon.y + h - s.height - margin - below;
+      const addr = `address:${win.address}`;
+      await hyprBatch([
+        ...(win.floating ? [] : [`setfloating ${addr}`]),
+        `resizewindowpixel exact ${s.width} ${s.height},${addr}`,
+        `movewindowpixel exact ${x} ${y},${addr}`,
+      ]);
+      out.push(kind);
+    }
+    return out.length ? `reset ${out.join(" ")}` : "nothing to reset";
   };
 
   const handle = async (line) => {
@@ -239,6 +315,8 @@ async function serve(initial) {
       case "login":
         await cdp.send("Target.createTarget", { url: "https://www.twitch.tv/login", newWindow: true });
         return "opened login";
+      case "reset":
+        return reset();
       case "status":
         return [...targets.values()].map((t) => `${kindOf(t.url) ?? "page"} ${t.url}`).join("\n") || "no pages";
       case "quit":
@@ -297,7 +375,7 @@ if (cmd === "serve") {
     console.log(await request(cmd));
   } catch (e) {
     if (!["ENOENT", "ECONNREFUSED"].includes(e.code)) throw e;
-    if (cmd === "status" || cmd === "quit") {
+    if (cmd === "status" || cmd === "quit" || cmd === "reset") {
       console.log("not running");
     } else {
       spawn(process.execPath, [process.argv[1], configPath, "serve", cmd], {
