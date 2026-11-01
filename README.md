@@ -7,7 +7,7 @@ A Home Manager module that toggles a pinned, floating Twitch player (and optiona
 ```nix
 # flake.nix inputs
 twitch-pip = {
-  url = "git+https://dawn.wine/popcat19/twitch-pip.git?ref=main";
+  url = "github:popcat19/twitch-pip";
   inputs.nixpkgs.follows = "nixpkgs";
 };
 ```
