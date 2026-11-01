@@ -32,6 +32,7 @@ let
     "size ${toString w} ${toString h}, match:class ${class}"
     "move ${x} ${y}, match:class ${class}"
     "no_initial_focus on, match:class ${class}"
+    "opacity ${toString cfg.hyprland.opacity} ${toString cfg.hyprland.opacity}, match:class ${class}"
   ];
 in
 {
@@ -116,6 +117,12 @@ in
         type = lib.types.ints.unsigned;
         default = 24;
         description = "Gap from the bottom-right monitor corner in logical pixels.";
+      };
+      opacity = lib.mkOption {
+        type = lib.types.numbers.between 0.1 1.0;
+        default = 1.0;
+        example = 0.8;
+        description = "Window opacity for the player and chat, focused or not.";
       };
     };
 
