@@ -32,6 +32,8 @@ let
     "size ${toString w} ${toString h}, match:class ${class}"
     "move ${x} ${y}, match:class ${class}"
     "no_initial_focus on, match:class ${class}"
+    # Blur would smear what shows through a translucent popup.
+    "no_blur on, match:class ${class}"
     "opacity ${toString cfg.hyprland.opacity} ${toString cfg.hyprland.opacity}, match:class ${class}"
   ];
 in
