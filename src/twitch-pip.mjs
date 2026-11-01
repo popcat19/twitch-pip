@@ -72,6 +72,13 @@ class Cdp {
     this.id = 0;
     this.pending = new Map();
     this.handlers = new Map();
+    // The browser closing or crashing resets the pipe; the child exit handler does cleanup.
+    const fail = () => {
+      for (const { reject } of this.pending.values()) reject(new Error("browser pipe closed"));
+      this.pending.clear();
+    };
+    inp.on("error", fail).on("close", fail);
+    out.on("error", fail);
     let buf = Buffer.alloc(0);
     inp.on("data", (chunk) => {
       buf = Buffer.concat([buf, chunk]);
@@ -119,6 +126,50 @@ function browserArgs(extra) {
 // process singleton, which is the only way to get a chromeless --app window after startup.
 function openInRunning(extra) {
   spawn(cfg.browser, browserArgs(extra), { stdio: "ignore", detached: true }).unref();
+}
+
+// Twitch's web client sends the auth-token cookie as the GQL Authorization header, so one
+// cookie is a full login. The token never leaves this process: no logs, no argv, no store.
+function readAuthToken() {
+  if (!cfg.authTokenFile) return null;
+  let token;
+  try {
+    token = readFileSync(cfg.authTokenFile, "utf8").trim();
+  } catch (e) {
+    console.error(`twitch-pip: auth token unreadable (${e.code}); keeping profile login`);
+    return null;
+  }
+  if (!/^[a-z0-9]{20,64}$/.test(token)) {
+    console.error("twitch-pip: auth token has an unexpected format; keeping profile login");
+    return null;
+  }
+  return token;
+}
+
+async function applyAuthToken(cdp, pages) {
+  const token = readAuthToken();
+  if (!token) return;
+  const { cookies } = await cdp.send("Storage.getCookies");
+  if (cookies.some((c) => c.name === "auth-token" && c.domain === ".twitch.tv" && c.value === token)) return;
+  await cdp.send("Storage.setCookies", {
+    cookies: [
+      {
+        domain: ".twitch.tv",
+        expires: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 365,
+        name: "auth-token",
+        path: "/",
+        sameSite: "Lax",
+        secure: true,
+        value: token,
+      },
+    ],
+  });
+  // The first window loaded before the cookie existed.
+  for (const targetId of pages()) {
+    const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
+    await cdp.send("Page.reload", {}, sessionId);
+    await cdp.send("Target.detachFromTarget", { sessionId });
+  }
 }
 
 async function serve(initial) {
@@ -169,6 +220,7 @@ async function serve(initial) {
     }, 1500);
   });
   await cdp.send("Target.setDiscoverTargets", { discover: true });
+  await applyAuthToken(cdp, () => [find("player"), find("chat")].filter(Boolean));
 
   const toggle = async (kind) => {
     const id = find(kind);

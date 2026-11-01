@@ -38,6 +38,17 @@ in
   options.programs.twitch-pip = {
     enable = lib.mkEnableOption "pinned Twitch player in an isolated Helium profile";
 
+    authTokenFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "/run/agenix/twitch-auth-token";
+      description = ''
+        Runtime path to a file holding the twitch.tv `auth-token` cookie value, for example an
+        agenix secret. It is injected into the profile on every start and overrides a manual login.
+        Must be a string path so the token never enters the Nix store.
+      '';
+    };
+
     browser = lib.mkOption {
       type = lib.types.package;
       default = pkgs.callPackage "${helium}/helium.nix" { };
@@ -144,6 +155,7 @@ in
         home.packages = [ cfg.package ];
         xdg.configFile."twitch-pip/config.json".text = builtins.toJSON {
           inherit (cfg)
+            authTokenFile
             channels
             extraFlags
             fallback
