@@ -51,28 +51,39 @@ Use a string path. A Nix path literal would copy the token into the world-readab
 
 ### Extract the token
 
-The token is a full login for the account. Do not paste it into chats, issues, or shell history.
+The token is a full login for the account. Keep it out of chats, issues, shell arguments, and shell history.
 
 1. In a browser Twitch accepts (Firefox, Zen, Chrome), open a **private window** and sign in to twitch.tv. A private window gives a separate session, so logging out of your daily session later does not revoke this token.
-2. In that window, open DevTools with `F12` or `Ctrl+Shift+I`.
-3. Open the cookie list for `https://www.twitch.tv`:
-   - Firefox and Zen: **Storage → Cookies**
-   - Chromium browsers: **Application → Storage → Cookies**
-4. Select the `auth-token` row and copy its **Value**. It is about 30 lowercase letters and digits.
-5. Close the private window without logging out. Closing it discards the cookie locally, and the token stays valid on Twitch's side.
+2. On a twitch.tv tab, open DevTools with `F12` and run this in the **Console**. It copies the value to the clipboard without printing it:
+
+   ```js
+   copy(document.cookie.match(/(?:^|; )auth-token=([^;]+)/)?.[1] ?? "not found")
+   ```
+
+   If the console blocks pasted code, type `allow pasting` first. The value is also under **Storage → Cookies** (Firefox, Zen) or **Application → Storage → Cookies** (Chromium) as `auth-token`, about 30 lowercase letters and digits.
+3. Close the private window without logging out. Closing it discards the cookie locally, and the token stays valid on Twitch's side.
 
 ### Encrypt it with agenix
 
 ```nix
-# secrets.nix
+# agenix-rules.nix
 "twitch-auth-token.age".publicKeys = [ host1 host2 ];
 ```
 
+Pipe the clipboard into agenix so the token never sits in an editor buffer or a shell argument. agenix stages the cleartext in `mktemp`; point `TMPDIR` at a tmpfs such as `$XDG_RUNTIME_DIR` if `/tmp` is on disk. Run it from the directory holding the rules file, because agenix looks up the entry by the literal file argument.
+
 ```bash
-agenix -e twitch-auth-token.age
+wl-paste -n | TMPDIR=$XDG_RUNTIME_DIR agenix -e twitch-auth-token.age
+agenix -d twitch-auth-token.age | wc -c   # about 30; 9 means "not found" was copied
 ```
 
-Paste the value as the only line, save, and quit the editor. Then expose it to your user:
+Clipboard managers keep a copy. With cliphist, delete the entry and clear the clipboard:
+
+```bash
+cliphist list | head -n1 | cliphist delete && wl-copy --clear
+```
+
+Then expose the secret to your user:
 
 ```nix
 age.secrets.twitch-auth-token = {
@@ -82,9 +93,11 @@ age.secrets.twitch-auth-token = {
 };
 ```
 
+After rebuilding, restart the player with `twitch-pip quit` and `twitch-pip toggle`. The token is applied on start.
+
 ### Rotate
 
-The token stops working when the session logs out, when the password changes, or when Twitch expires it. The player then shows logged-out content. Repeat the extraction and run `agenix -e twitch-auth-token.age` again with the new value.
+The token stops working when the session logs out, when the password changes, or when Twitch expires it. The player then shows logged-out content. Repeat the extraction and encryption with the new value. A wrapper that chains these steps is in [popcat19-nixos-hm `twitch-token.fish`](https://dawn.wine/popcat19/popcat19-nixos-hm/src/branch/dev/configuration/fish_functions/twitch-token.fish).
 
 ## Behaviour
 
