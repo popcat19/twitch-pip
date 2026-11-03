@@ -113,5 +113,6 @@ The token stops working when the session logs out, when the password changes, or
 - Clicks cannot pass through the windows; Hyprland has no rule for it. Hide them, or drag them away and `reset` later.
 - Closing the last window, `quit`, or killing either process (even with `SIGKILL`) stops both the browser and `serve`. The next toggle starts fresh.
 - F5 reloads the page as in any browser window.
+- The browser runs with `--autoplay-policy=no-user-gesture-required`, so the player starts unmuted on spawn and after every channel switch.
 - Hyprland rules float, pin and place the player in the bottom-right corner with chat above it, and keep both from taking focus when they open. Blur is off for both, so a `hyprland.opacity` below 1.0 shows the windows behind them unblurred. Pinned floats stay visible over fullscreen windows.
 - Helium is built against the consumer's `pkgs`. Using a different nixpkgs than the system can break GPU acceleration through a glibc mismatch with `/run/opengl-driver`.

@@ -205,6 +205,8 @@ function browserArgs(extra) {
     `--user-data-dir=${cfg.profileDir}`,
     "--no-first-run",
     "--no-default-browser-check",
+    // Without a user gesture Chromium forces the player muted on spawn and on every switch.
+    "--autoplay-policy=no-user-gesture-required",
     ...cfg.extraFlags,
   ];
   if (cfg.extensions.length) args.push(`--load-extension=${cfg.extensions.join(",")}`);
