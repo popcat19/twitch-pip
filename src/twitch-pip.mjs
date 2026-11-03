@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Purpose: Toggle a pinned Twitch player and chat in an isolated Helium profile, switching to the highest-priority live channel at runtime
+// Purpose: Toggle a pinned Twitch player and chat in an isolated Helium profile, picking the highest-priority live channel on start and notifying when a higher one goes live
 //
 // One `serve` process owns the browser through --remote-debugging-pipe (no TCP port, so other
 // local processes cannot drive the logged-in session). Hotkey invocations talk to it over a
@@ -12,7 +12,7 @@ import { join } from "node:path";
 
 const [configPath, cmd = "toggle"] = process.argv.slice(2);
 if (!configPath) {
-  console.error("usage: twitch-pip <config.json> [toggle|chat|login|status|quit|serve]");
+  console.error("usage: twitch-pip <config.json> [toggle|chat|select|login|reset|status|quit|serve]");
   process.exit(2);
 }
 const cfg = JSON.parse(readFileSync(configPath, "utf8"));
@@ -23,7 +23,7 @@ for (const c of [...cfg.channels, cfg.fallback]) {
 
 if (!process.env.XDG_RUNTIME_DIR) throw new Error("XDG_RUNTIME_DIR is unset");
 const SOCK = join(process.env.XDG_RUNTIME_DIR, "twitch-pip.sock");
-const COMMANDS = new Set(["toggle", "chat", "login", "reset", "status", "quit"]);
+const COMMANDS = new Set(["toggle", "chat", "select", "login", "reset", "status", "quit"]);
 const HIDDEN = "special:twitch-pip";
 
 // Hyprland request socket; same wire format as hyprctl. Window management is skipped
@@ -89,15 +89,70 @@ async function liveness(ch) {
   return "unknown";
 }
 
+const known = () => [...new Set([...cfg.channels, cfg.fallback])];
+
+async function livenessAll(channels) {
+  const states = await Promise.all(channels.map(liveness));
+  return new Map(channels.map((ch, i) => [ch, states[i]]));
+}
+
 // Walk the priority list; an unknown result on a higher-priority channel blocks the switch so a
 // flaky lookup never drops a live primary in favour of a fallback.
-async function pickChannel() {
+function pickFrom(states) {
   for (const ch of cfg.channels) {
-    const state = await liveness(ch);
+    const state = states.get(ch);
     if (state === "live") return ch;
     if (state === "unknown") return null;
   }
   return cfg.fallback;
+}
+
+const pickChannel = async () => pickFrom(await livenessAll(cfg.channels));
+
+// Menu lines start with the login, so a typed login that is not in the list also works.
+function menu(lines) {
+  return new Promise((resolve) => {
+    const [bin, ...args] = cfg.menuCommand;
+    const proc = spawn(bin, args, { stdio: ["pipe", "pipe", "ignore"] });
+    let out = "";
+    proc.stdout.on("data", (d) => (out += d));
+    proc.on("error", (e) => {
+      console.error(`twitch-pip: menu failed: ${e.message}`);
+      resolve(null);
+    });
+    proc.on("close", () => {
+      const ch = out.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
+      resolve(LOGIN.test(ch) ? ch : null);
+    });
+    proc.stdin.on("error", () => {});
+    proc.stdin.end(`${lines.join("\n")}\n`);
+  });
+}
+
+async function selectChannel(current) {
+  const states = await livenessAll(known());
+  const width = Math.max(...known().map((ch) => ch.length));
+  const lines = known().map((ch) => {
+    const tag = ch === current ? " · playing" : "";
+    return `${ch.padEnd(width)}  ${states.get(ch)}${tag}`;
+  });
+  return { ch: await menu(lines), states };
+}
+
+// notify-send blocks until the notification closes and prints the chosen action key.
+function notify(summary, body, onSwitch) {
+  if (!cfg.notifySend) return;
+  const proc = spawn(
+    cfg.notifySend,
+    ["--app-name=twitch-pip", "--action=default=Switch", summary, body],
+    { stdio: ["ignore", "pipe", "ignore"] },
+  );
+  let out = "";
+  proc.stdout.on("data", (d) => (out += d));
+  proc.on("error", (e) => console.error(`twitch-pip: notify failed: ${e.message}`));
+  proc.on("close", () => {
+    if (out.trim() === "default") onSwitch();
+  });
 }
 
 class Cdp {
@@ -219,7 +274,21 @@ async function serve(initial) {
     return serve(initial);
   }
 
-  const desired = (await pickChannel()) || cfg.fallback;
+  let desired;
+  // Channels already announced while live; cleared once seen offline so the next go-live notifies.
+  const notified = new Set();
+  if (initial === "select") {
+    const { ch, states } = await selectChannel(null);
+    if (!ch) {
+      server.close();
+      rmSync(SOCK, { force: true });
+      return;
+    }
+    desired = ch;
+    for (const [c, s] of states) if (s === "live") notified.add(c);
+  } else {
+    desired = (await pickChannel()) || cfg.fallback;
+  }
   const first = {
     chat: `--app=${chatUrl(desired)}`,
     login: "https://www.twitch.tv/login",
@@ -306,12 +375,39 @@ async function serve(initial) {
     return out.length ? `reset ${out.join(" ")}` : "nothing to reset";
   };
 
+  const current = () => {
+    const id = find("player") ?? find("chat");
+    return id ? channelOf(targets.get(id).url) : desired;
+  };
+
+  const navigate = async (ch) => {
+    desired = ch;
+    for (const kind of ["player", "chat"]) {
+      const id = find(kind);
+      if (!id || channelOf(targets.get(id).url) === ch) continue;
+      const { sessionId } = await cdp.send("Target.attachToTarget", { targetId: id, flatten: true });
+      await cdp.send("Page.navigate", { url: kind === "chat" ? chatUrl(ch) : playerUrl(ch) }, sessionId);
+      await cdp.send("Target.detachFromTarget", { sessionId });
+    }
+  };
+
+  const select = async () => {
+    const { ch, states } = await selectChannel(current());
+    if (!ch) return "no channel selected";
+    // A deliberate pick should not be followed by alerts for channels that were already live.
+    for (const [c, s] of states) if (s === "live") notified.add(c);
+    await navigate(ch);
+    return `switched to ${ch}`;
+  };
+
   const handle = async (line) => {
     switch (line) {
       case "toggle":
         return toggle("player");
       case "chat":
         return toggle("chat");
+      case "select":
+        return select();
       case "login":
         await cdp.send("Target.createTarget", { url: "https://www.twitch.tv/login", newWindow: true });
         return "opened login";
@@ -338,20 +434,38 @@ async function serve(initial) {
     });
   });
 
-  const retarget = async () => {
-    const ch = await pickChannel();
-    if (!ch) return;
-    for (const kind of ["player", "chat"]) {
-      const id = find(kind);
-      if (!id || channelOf(targets.get(id).url) === ch) continue;
-      const { sessionId } = await cdp.send("Target.attachToTarget", { targetId: id, flatten: true });
-      await cdp.send("Page.navigate", { url: kind === "chat" ? chatUrl(ch) : playerUrl(ch) }, sessionId);
-      await cdp.send("Target.detachFromTarget", { sessionId });
+  // The current channel is kept while it streams. Only a live-to-offline transition falls back to
+  // the priority list, so a deliberately picked offline channel stays put.
+  let watched = { ch: null, wasLive: false };
+  const poll = async () => {
+    const ch = current();
+    if (watched.ch !== ch) watched = { ch, wasLive: false };
+    const states = await livenessAll([...new Set([...known(), ch])]);
+    const state = states.get(ch);
+
+    const rank = (c) => {
+      const i = cfg.channels.indexOf(c);
+      return i === -1 ? cfg.channels.length : i;
+    };
+    for (const [c, s] of states) {
+      if (s === "offline") notified.delete(c);
+      if (s !== "live" || c === ch || notified.has(c)) continue;
+      notified.add(c);
+      if (rank(c) < rank(ch)) {
+        notify(`${c} is live`, `Playing ${ch}`, () =>
+          navigate(c).catch((e) => console.error(`twitch-pip: switch failed: ${e.message}`)),
+        );
+      }
     }
+
+    if (state === "live") watched.wasLive = true;
+    if (state !== "offline" || !watched.wasLive) return;
+    const next = pickFrom(states);
+    if (next && next !== ch) await navigate(next);
   };
   const loop = () =>
-    retarget()
-      .catch((e) => console.error(`twitch-pip: retarget failed: ${e.message}`))
+    poll()
+      .catch((e) => console.error(`twitch-pip: poll failed: ${e.message}`))
       .finally(() => setTimeout(loop, cfg.pollSeconds * 1000));
   setTimeout(loop, cfg.pollSeconds * 1000);
 }

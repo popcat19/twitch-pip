@@ -73,7 +73,7 @@ in
         "caseoh_"
         "xqc"
       ];
-      description = "Twitch logins in priority order. The first live one plays.";
+      description = "Twitch logins in priority order. The first live one plays on start.";
     };
 
     chatSize = lib.mkOption {
@@ -108,6 +108,7 @@ in
         chat = bindOption "chat" "SUPER SHIFT, Y";
         quit = bindOption "quit" "SUPER CTRL, Y";
         reset = bindOption "reset" "SUPER ALT, Y";
+        select = bindOption "select" "SUPER CTRL SHIFT, Y";
         toggle = bindOption "toggle" "SUPER, Y";
       };
       enable =
@@ -127,6 +128,27 @@ in
         description = "Window opacity for the player and chat, focused or not.";
       };
     };
+
+    menuCommand = lib.mkOption {
+      type = lib.types.nonEmptyListOf lib.types.str;
+      default = [
+        (lib.getExe pkgs.fuzzel)
+        "--dmenu"
+        "--prompt=twitch> "
+      ];
+      defaultText = lib.literalExpression ''[ (lib.getExe pkgs.fuzzel) "--dmenu" "--prompt=twitch> " ]'';
+      example = [
+        "rofi"
+        "-dmenu"
+      ];
+      description = "dmenu-style command for `twitch-pip select`. Reads channel lines on stdin and prints the chosen line.";
+    };
+
+    notify =
+      lib.mkEnableOption "a notification (click to switch) when a higher-priority channel goes live"
+      // {
+        default = true;
+      };
 
     package = lib.mkOption {
       type = lib.types.package;
@@ -168,11 +190,13 @@ in
             channels
             extraFlags
             fallback
+            menuCommand
             pollSeconds
             profileDir
             ;
           browser = lib.getExe cfg.browser;
           extensions = map toString cfg.extensions;
+          notifySend = if cfg.notify then lib.getExe' pkgs.libnotify "notify-send" else null;
           # Lets the script hide, show and reset the windows the rules below match.
           hyprland =
             if cfg.hyprland.enable then

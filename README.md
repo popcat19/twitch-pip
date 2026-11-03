@@ -1,6 +1,6 @@
 # twitch-pip
 
-A Home Manager module that toggles a pinned, floating Twitch player (and optionally its chat) in an isolated [Helium](https://github.com/imputnet/helium) profile with [TTV AB](https://github.com/GosuDRM/TTV-AB) loaded. While the window is open, the player and chat switch in place to the first live channel in a priority list, or show a fallback channel when none are live.
+A Home Manager module that toggles a pinned, floating Twitch player (and optionally its chat) in an isolated [Helium](https://github.com/imputnet/helium) profile with [TTV AB](https://github.com/GosuDRM/TTV-AB) loaded. On start it plays the first live channel in a priority list, or a fallback channel when none are live. While open, it stays on the current channel and sends a notification with a Switch action when a higher-priority channel goes live.
 
 ## Usage
 
@@ -24,6 +24,7 @@ programs.twitch-pip = {
     toggle = "SUPER, Y";
     chat = "SUPER SHIFT, Y";
     reset = "SUPER ALT, Y";
+    select = "SUPER CTRL SHIFT, Y";
     quit = "SUPER CTRL, Y";
   };
 };
@@ -35,6 +36,7 @@ programs.twitch-pip = {
 | --- | --- |
 | `twitch-pip toggle` | Open the player, then hide and show it |
 | `twitch-pip chat` | Open popout chat for the current channel, then hide and show it |
+| `twitch-pip select` | Pick a channel from a dmenu-style menu (`menuCommand`, fuzzel by default) showing live state; a typed login also works. Starts the player if needed |
 | `twitch-pip login` | Open twitch.tv/login in a normal window of the same profile (Twitch blocks Helium password logins, see below) |
 | `twitch-pip reset` | Move the player and chat back to the default corner and size |
 | `twitch-pip status` | List open player and chat pages |
@@ -104,7 +106,8 @@ The token stops working when the session logs out, when the password changes, or
 
 ## Behaviour
 
-- Live checks use `decapi.me/twitch/uptime/<login>` every `pollSeconds` (default 60). An unknown or failed result on a higher-priority channel keeps the current stream instead of falling through. 24/7 channels can sit at the end of `channels` so they are tried in order before `fallback`.
+- Live checks use `decapi.me/twitch/uptime/<login>` every `pollSeconds` (default 60). The priority list only decides the channel on start. An unknown or failed result on a higher-priority channel picks `fallback` instead of a lower channel. 24/7 channels can sit at the end of `channels` so they are tried in order before `fallback`.
+- While open, the current channel is kept. A higher-priority channel going live sends one notification (`notify`, via `notify-send`) per go-live. Clicking it (the `default` action) moves the player and chat there. Only when the current channel goes from live to offline does it fall back to the priority list, so a channel picked while offline stays.
 - One `serve` process owns the browser over `--remote-debugging-pipe`. No TCP debug port is opened. Hotkeys talk to it through `$XDG_RUNTIME_DIR/twitch-pip.sock`.
 - Under Hyprland, hiding moves a window to the `special:twitch-pip` workspace. The stream and its audio keep running, and the window comes back where you left it. Without Hyprland, toggling closes the window.
 - Clicks cannot pass through the windows; Hyprland has no rule for it. Hide them, or drag them away and `reset` later.
